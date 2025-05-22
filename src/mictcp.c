@@ -1,6 +1,11 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 
+mic_tcp_sock *tab_socket;
+int tab_socket_size = 0;
+
+const unsigned long timeout_connection = 10000; // timeout pour accepter une connection
+
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
@@ -10,9 +15,17 @@ int mic_tcp_socket(start_mode sm)
    int result = -1;
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
    result = initialize_components(sm); /* Appel obligatoire */
+	if (result == -1)
+		return -1;
    set_loss_rate(0);
-
-   return result;
+   tab_socket_size++;
+   if (tab_socket_size == 1)
+		tab_socket = malloc(sizeof(mic_tcp_socket));
+   else
+   	tab_socket = realloc(tab_socket, tab_socket_size * sizeof(mic_tcp_sock));
+   mic_tcp_sock sock = {.fd = tab_socket_size - 1, .state = IDLE };
+   tab_socket[tab_socket_size-1] = sock;
+   return tab_socket_size-1;
 }
 
 /*
@@ -22,7 +35,10 @@ int mic_tcp_socket(start_mode sm)
 int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 {
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
-   return -1;
+	if (socket >= tab_socket_size || socket < 0)
+   	return -1;
+	tab_socket[socket].local_addr = addr;
+	return 0;
 }
 
 /*
@@ -32,7 +48,15 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
-    return -1;
+	if (socket >= tab_socket_size || socket < 0)
+   	return -1;
+	mic_tcp_pdu* pdu;
+	int recv = IP_recv(pdu, &tab_socket[socket].local_addr.ip_addr, &addr->ip_addr, timeout_connection);
+	if (recv == -1 || pdu->header.syn != 1)
+		return -1;
+	tab_socket[socket].remote_addr = *addr;
+	tab_socket[socket].state = ESTABLISHED;
+	return 0;
 }
 
 /*
