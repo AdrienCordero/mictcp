@@ -1,0 +1,41 @@
+#!/bin/bash
+
+puits=false
+sourc=false
+dest="127.0.0.1"
+
+usage() { echo "Usage: $0 [-p|-s destination] port" 1>&2; exit 1; }
+
+while getopts "ps:" o; do
+    case "${o}" in
+            p)
+                    puits=true
+                    ;;
+            s)
+                    sourc=true
+                    dest=${OPTARG}
+                    ;;
+            *)
+                usage
+                ;;
+    esac
+done
+if (([ "$sourc" = true ] && [ $# -ne 3 ]) || ([ "$puits" = true ] && [ $# -ne 2 ])) || (([ "$puits" = true ] && [ "$sourc" = true ]) || ([ "$puits" = false ] && [ "$sourc" = false ]))  ; then
+    usage
+    exit 1
+fi
+port=${@: -1}
+
+if [ "$puits" = true ]; then
+    cd build
+    ./server $port
+    cd ..
+fi
+
+if [ "$sourc" = true ]; then
+
+    cd build
+    ./client $dest $port
+    cd ..
+fi
+
