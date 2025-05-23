@@ -89,7 +89,6 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 	 mic_tcp_pdu pdu = {.header = header, .payload = payload};
 
 	 //	Envoie
-	 printf("send vers %s\n", tab_socket[mic_sock].remote_addr.ip_addr.addr);
 	 int i = IP_send(pdu, tab_socket[mic_sock].remote_addr.ip_addr);
 
 	 //	Attente ACK
@@ -158,13 +157,11 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 			};
 			mic_tcp_payload payload = {.data = "", .size = 0};
 			mic_tcp_pdu pdu_ack = {.header = header, .payload = payload };
-			printf("envoie de l'ACK à %s\n", remote_addr.addr);
 			if (IP_send(pdu_ack, remote_addr) == -1) {
 				printf("Erreur dans l'envoie de l'ACK\n");
 				i--;
 				continue;
 			}
-			printf("ACK envoyé\n");
 
 			//	Mise dans le buffer
 			if (pdu.header.seq_num == num_ack) {
