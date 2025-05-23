@@ -21,7 +21,7 @@ int mic_tcp_socket(start_mode sm)
    set_loss_rate(0);
    tab_socket_size++;
    if (tab_socket_size == 1)
-		tab_socket = malloc(sizeof(mic_tcp_socket));
+		tab_socket = malloc(sizeof(mic_tcp_sock));
    else
    	tab_socket = realloc(tab_socket, tab_socket_size * sizeof(mic_tcp_sock));
    mic_tcp_sock sock = {.fd = tab_socket_size - 1, .state = IDLE };
@@ -77,13 +77,27 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
+
+	//	Création PDU
     mic_tcp_header header = {.source_port = tab_socket[mic_sock].local_addr.port,
 										.dest_port = tab_socket[mic_sock].remote_addr.port,
 										.seq_num = 0,
 										.syn = 1};
 	 mic_tcp_payload payload = {.data = mesg, .size = mesg_size};
 	 mic_tcp_pdu pdu = {.header = header, .payload = payload};
+
+	 //	Envoie
+	 printf("send vers %s\n", tab_socket[mic_sock].remote_addr.ip_addr.addr);
 	 int i = IP_send(pdu, tab_socket[mic_sock].remote_addr.ip_addr);
+
+	 //	Attente ACK
+	 mic_tcp_pdu pdu_ack;
+	 if (IP_recv(&pdu_ack, &tab_socket[mic_sock].local_addr.ip_addr, &tab_socket[mic_sock].remote_addr.ip_addr, timeout_recv) == -1 ||
+		pdu_ack.header.ack != 1) {
+		printf("erreur dans l'envoie du pdu ou la reception de l'ACK\n");
+		return mic_tcp_send(mic_sock, mesg, mesg_size);
+	 }
+
 	 return i;
 }
 
@@ -127,6 +141,25 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
    	printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 	for (int i=0; i < tab_socket_size; i++) {
 		if (tab_socket[i].state == ESTABLISHED && tab_socket[i].local_addr.port == pdu.header.dest_port) {
+
+			//	Envoie ACK
+			mic_tcp_header header = {
+				.source_port = tab_socket[i].local_addr.port,
+				.dest_port = tab_socket[i].remote_addr.port,
+				.ack_num = 0,
+				.ack = 1
+			};
+			mic_tcp_payload payload = {.data = "", .size = 0};
+			mic_tcp_pdu pdu_ack = {.header = header, .payload = payload };
+			printf("envoie de l'ACK à %s\n", remote_addr.addr);
+			if (IP_send(pdu_ack, remote_addr) == -1) {
+				printf("Erreur dans l'envoie de l'ACK\n");
+				i--;
+				continue;
+			}
+			printf("ACK envoyé\n");
+
+			//	Mise dans le buffer
 			app_buffer_put(pdu.payload);
 			return;
 		}
