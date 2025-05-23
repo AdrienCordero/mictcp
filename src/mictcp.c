@@ -35,9 +35,9 @@ int mic_tcp_socket(start_mode sm)
  */
 int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 {
-   printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
+   	printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 	if (socket >= tab_socket_size || socket < 0 || tab_socket[socket].state == CLOSED)
-   	return -1;
+   		return -1;
 	tab_socket[socket].local_addr = addr;
 	printf("addresse : %s, port : %d\n", addr.ip_addr.addr, addr.port);
 	return 0;
@@ -97,9 +97,9 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
 {
    printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 	if (socket >= tab_socket_size || socket < 0 || tab_socket[socket].state == CLOSED)
-   	return -1;
+   		return -1;
 	mic_tcp_payload payload = {.data = mesg, .size = max_mesg_size};
-   return app_buffer_get(payload);
+   	return app_buffer_get(payload);
 }
 
 /*
@@ -124,6 +124,11 @@ int mic_tcp_close (int socket)
  */
 void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_ip_addr remote_addr)
 {
-   printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-	app_buffer_put(pdu.payload);
+   	printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
+	for (int i=0; i < tab_socket_size; i++) {
+		if (tab_socket[i].state == ESTABLISHED && tab_socket[i].local_addr.port == pdu.header.dest_port) {
+			app_buffer_put(pdu.payload);
+			return;
+		}
+	}
 }
