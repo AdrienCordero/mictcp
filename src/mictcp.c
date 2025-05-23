@@ -1,11 +1,13 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 
-mic_tcp_sock *tab_socket;
-int tab_socket_size = 0;
-
 const unsigned long timeout_connection = 10000; // timeout pour accepter une connection
 const unsigned long timeout_recv = 1000;	//	timeout pour recevoir un message
+
+mic_tcp_sock *tab_socket;
+int tab_socket_size = 0;
+int num_sequence = 0;
+int num_ack = 0;
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -23,7 +25,7 @@ int mic_tcp_socket(start_mode sm)
    if (tab_socket_size == 1)
 		tab_socket = malloc(sizeof(mic_tcp_sock));
    else
-   	tab_socket = realloc(tab_socket, tab_socket_size * sizeof(mic_tcp_sock));
+   		tab_socket = realloc(tab_socket, tab_socket_size * sizeof(mic_tcp_sock));
    mic_tcp_sock sock = {.fd = tab_socket_size - 1, .state = IDLE };
    tab_socket[tab_socket_size-1] = sock;
    return tab_socket_size-1;
@@ -51,7 +53,7 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 {
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 	if (socket >= tab_socket_size || socket < 0 || tab_socket[socket].state == CLOSED)
-   	return -1;
+   		return -1;
 	tab_socket[socket].state = ESTABLISHED;
 	return 0;
 }
@@ -64,10 +66,10 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 	if (socket >= tab_socket_size || socket < 0 || tab_socket[socket].state == CLOSED)
-   	return -1;
-	 tab_socket[socket].remote_addr = addr;
-	 tab_socket[socket].state = ESTABLISHED;
-	 return 0;
+   		return -1;
+	tab_socket[socket].remote_addr = addr;
+	tab_socket[socket].state = ESTABLISHED;
+	return 0;
 }
 
 /*
@@ -81,7 +83,7 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 	//	Création PDU
     mic_tcp_header header = {.source_port = tab_socket[mic_sock].local_addr.port,
 										.dest_port = tab_socket[mic_sock].remote_addr.port,
-										.seq_num = 0,
+										.seq_num = num_sequence,
 										.syn = 1};
 	 mic_tcp_payload payload = {.data = mesg, .size = mesg_size};
 	 mic_tcp_pdu pdu = {.header = header, .payload = payload};
@@ -92,12 +94,17 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 
 	 //	Attente ACK
 	 mic_tcp_pdu pdu_ack;
-	 if (IP_recv(&pdu_ack, &tab_socket[mic_sock].local_addr.ip_addr, &tab_socket[mic_sock].remote_addr.ip_addr, timeout_recv) == -1 ||
-		pdu_ack.header.ack != 1) {
+	 if (IP_recv(&pdu_ack, &tab_socket[mic_sock].local_addr.ip_addr, &tab_socket[mic_sock].remote_addr.ip_addr, timeout_recv) == -1) {
 		printf("erreur dans l'envoie du pdu ou la reception de l'ACK\n");
 		return mic_tcp_send(mic_sock, mesg, mesg_size);
 	 }
+	 if (pdu_ack.header.ack != 1 || pdu_ack.header.ack_num != num_sequence) {
+		printf("Le PDU recu n'est pas un ACK, valeur : %s\n", pdu_ack.payload.data);
+		return mic_tcp_send(mic_sock, mesg, mesg_size);
+	 }
 
+	 //	Reception correct de l'ACK
+	 num_sequence++;
 	 return i;
 }
 
@@ -123,11 +130,11 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
  */
 int mic_tcp_close (int socket)
 {
-   printf("[MIC-TCP] Appel de la fonction :  "); printf(__FUNCTION__); printf("\n");
+   	printf("[MIC-TCP] Appel de la fonction :  "); printf(__FUNCTION__); printf("\n");
 	if (socket >= tab_socket_size || socket < 0 || tab_socket[socket].state == CLOSED)
-   	return -1;
+   		return -1;
 	tab_socket[socket].state = CLOSED;
-   return 0;
+   	return 0;
 }
 
 /*
@@ -146,7 +153,7 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 			mic_tcp_header header = {
 				.source_port = tab_socket[i].local_addr.port,
 				.dest_port = tab_socket[i].remote_addr.port,
-				.ack_num = 0,
+				.ack_num = pdu.header.seq_num,
 				.ack = 1
 			};
 			mic_tcp_payload payload = {.data = "", .size = 0};
@@ -160,7 +167,10 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 			printf("ACK envoyé\n");
 
 			//	Mise dans le buffer
-			app_buffer_put(pdu.payload);
+			if (pdu.header.seq_num == num_ack) {
+				app_buffer_put(pdu.payload);
+				num_ack++;
+			}
 			return;
 		}
 	}
