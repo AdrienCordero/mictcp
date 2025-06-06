@@ -13,7 +13,7 @@ bool *window;
 const int size_window = 100;
 const int acceptable_loss = 3;
 
-const int loss = 0;
+const int loss = 1;
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
