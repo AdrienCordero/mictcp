@@ -2,8 +2,7 @@
 #include <api/mictcp_core.h>
 #include <stdbool.h>
 
-const unsigned long timeout_recv = 1000;	//	timeout pour recevoir un message
-const unsigned long timeout_connection = 10000;	//	timeout pour se connecter
+const unsigned long timeout_recv = 100;	//	timeout pour recevoir un message
 
 mic_tcp_sock *tab_socket;
 int tab_socket_size = 0;
@@ -11,10 +10,10 @@ int num_sequence = 0;
 int num_ack = 0;
 
 bool *window;
-const int size_window = 30;
+const int size_window = 100;
 const int acceptable_loss = 3;
 
-const int loss = 5;
+const int loss = 0;
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -67,19 +66,7 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
    	printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
 	if (socket >= tab_socket_size || socket < 0 || tab_socket[socket].state == CLOSED)
    		return -1;
-	/*mic_tcp_header header = {};
-	mic_tcp_payload payload = {};
-	mic_tcp_pdu pdu = {.header = header, .payload = payload};
 
-	int i = IP_recv(&pdu, &tab_socket[socket].local_addr.ip_addr, &addr->ip_addr, timeout_connection);
-	printf("i : %d\n", i);
-	if (i == -1) {
-		printf("erreur dans l'établissement de connexion\n");
-		exit(EXIT_FAILURE);
-	}*/
-
-
-	tab_socket[socket].remote_addr = *addr;
 	tab_socket[socket].state = ESTABLISHED;
 	printf("local : %s, remote : %s\n", tab_socket[socket].local_addr.ip_addr.addr, tab_socket[socket].remote_addr.ip_addr.addr);
 	return 0;
@@ -96,17 +83,7 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
    		return -1;
 
 	tab_socket[socket].remote_addr = addr;
-	printf("local : %s, remote : %s\n", tab_socket[socket].local_addr.ip_addr.addr, tab_socket[socket].remote_addr.ip_addr.addr);
-
-	/*mic_tcp_header header = {.dest_port = addr.port, .syn = 1};
-	mic_tcp_payload payload = {.data = "", .size = 0};
-	mic_tcp_pdu pdu = {.header = header, .payload = payload};
-	
-	if (IP_send(pdu, addr.ip_addr) == -1) {
-		printf("erreur dans l'établissement de connexion\n");
-		exit(EXIT_FAILURE);
-	}*/
-
+	printf("local : %s, remote : %s, remote_port : %d\n", tab_socket[socket].local_addr.ip_addr.addr, tab_socket[socket].remote_addr.ip_addr.addr, tab_socket[socket].remote_addr.port);
 	tab_socket[socket].state = ESTABLISHED;
 	return 0;
 }
@@ -146,17 +123,21 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 	
 	 //	Envoie
 	 int i = IP_send(pdu, tab_socket[mic_sock].remote_addr.ip_addr);
+	 if (i == -1){
+		printf("Erreur lors de l'envoie du message\n");
+		return mic_tcp_send(mic_sock, mesg, mesg_size);
+	 } 
 	 printf("num_seq : %d\n", num_sequence);
 
 	 //	Attente ACK
 	 mic_tcp_pdu pdu_ack;
-	 pdu_ack.payload.size = 0;
-	 printf("local : %s, remote : %s\n", tab_socket[mic_sock].local_addr.ip_addr.addr, tab_socket[mic_sock].remote_addr.ip_addr.addr);
+	 tab_socket[mic_sock].local_addr.ip_addr.addr_size = 0;
+	 tab_socket[mic_sock].remote_addr.ip_addr.addr_size = 0;
 	 if (IP_recv(&pdu_ack, &tab_socket[mic_sock].local_addr.ip_addr, &tab_socket[mic_sock].remote_addr.ip_addr, timeout_recv) == -1) {
 		update_window(false);
 		if (loss_is_acceptable()) {
 			printf("perte acceptable, timer\n");
-	 		return i;
+	 		return 0;
 		}
 		printf("perte pas acceptable, timer\n");
 		printf("erreur dans l'envoie du pdu ou la reception de l'ACK\n");
@@ -167,7 +148,7 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 		if (loss_is_acceptable()) {
 			printf("perte acceptable, num_seq\n");
 			num_sequence = pdu_ack.header.ack_num;
-	 		return i;
+	 		return 0;
 		}
 		printf("perte pas acceptable, num_seq\n");
 		printf("Le PDU recu n'est pas un ACK, valeur : %s\n", pdu_ack.payload.data);
@@ -175,6 +156,7 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 	 }
 
 	 //	Reception correct de l'ACK
+	 printf("ACK recu\n");
 	 update_window(true);
 	 num_sequence++;
 	 return i;
@@ -192,6 +174,7 @@ int mic_tcp_recv (int socket, char* mesg, int max_mesg_size)
 	if (socket >= tab_socket_size || socket < 0 || tab_socket[socket].state == CLOSED)
    		return -1;
 	mic_tcp_payload payload = {.data = mesg, .size = max_mesg_size};
+	//printf("mesg : %s\n", mesg);
    	return app_buffer_get(payload);
 }
 
@@ -221,6 +204,8 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 	for (int i=0; i < tab_socket_size; i++) {
 		if (tab_socket[i].state == ESTABLISHED && tab_socket[i].local_addr.port == pdu.header.dest_port) {
 
+			printf("envoie de l'ACK\n");
+
 			//	Envoie ACK
 			mic_tcp_header header = {
 				.source_port = tab_socket[i].local_addr.port,
@@ -235,6 +220,7 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 				i--;
 				continue;
 			}
+			printf("ACK envoyé\n");
 
 			//	Mise dans le buffer
 			if (pdu.header.seq_num == num_ack) {
