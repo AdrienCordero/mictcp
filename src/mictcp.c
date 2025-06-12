@@ -3,7 +3,8 @@
 #include <stdbool.h>
 
 const unsigned long timeout_recv = 100;	//	timeout pour recevoir un message
-const unsigned long timeout_connection = 5000;	//	timeout pour recevoir le ACK pour la connection
+const unsigned long timeout_connection = 1000;	//	timeout pour recevoir le ACK pour la connection
+const unsigned long timeout_fin_connection = 5000;	//	timeout pour fermer la connection si l'ack a été perdu
 
 mic_tcp_sock *tab_socket;
 int tab_socket_size = 0;
@@ -14,7 +15,7 @@ bool *window;
 const int size_window = 100;
 const int acceptable_loss = 3;
 
-const int loss = 0;
+const int loss = 50;
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -216,7 +217,38 @@ int mic_tcp_close (int socket)
    	printf("[MIC-TCP] Appel de la fonction :  "); printf(__FUNCTION__); printf("\n");
 	if (socket >= tab_socket_size || socket < 0 || tab_socket[socket].state == CLOSED)
    		return -1;
+
+	//	Send FIN
+	mic_tcp_header header = {.source_port = tab_socket[socket].local_addr.port, .dest_port = tab_socket[socket].remote_addr.port, .fin = 1};
+	mic_tcp_payload payload = { "", 0 };
+	mic_tcp_pdu pdu = { .header = header, .payload = payload };
+	if (IP_send(pdu, tab_socket[socket].remote_addr.ip_addr) == -1) {
+		printf("erreur lors de la fermeture de connexion\n");
+		return -1;
+	}
+	tab_socket[socket].state = CLOSING;
+
+	//	Reception FIN ACK
+	mic_tcp_pdu *pdu_fin_ack = malloc(sizeof(mic_tcp_pdu));
+	if (IP_recv(pdu_fin_ack, &tab_socket[socket].local_addr.ip_addr, &tab_socket[socket].remote_addr.ip_addr, timeout_fin_connection) == -1)
+		return mic_tcp_close(socket);
+	if (pdu_fin_ack->header.fin != 1 || pdu_fin_ack->header.ack != 1) {
+		printf("le pdu recu n'est pas un fin_ack\n");
+		return mic_tcp_close(socket);
+	}
+
+	//	Send ACK
+	mic_tcp_header header_ack = {.source_port = tab_socket[socket].local_addr.port, .dest_port = tab_socket[socket].remote_addr.port, .ack = 1};
+	mic_tcp_payload payload_ack = { "", 0 };
+	mic_tcp_pdu pdu_ack = { .header = header_ack, .payload = payload_ack };
+	if (IP_send(pdu_ack, tab_socket[socket].remote_addr.ip_addr) == -1) {
+		printf("erreur lors de la fermeture de connexion\n");
+		return -1;
+	}
+
 	tab_socket[socket].state = CLOSED;
+	printf("socket ferme\n");
+
    	return 0;
 }
 
@@ -263,6 +295,26 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 			}
 
 			else if (tab_socket[i].state == ESTABLISHED) {
+
+				if (pdu.header.fin == 1) {
+					printf("fermeture de connexion...\n");
+					mic_tcp_header header = {
+						.source_port = tab_socket[i].local_addr.port,
+						.dest_port = tab_socket[i].remote_addr.port,
+						.ack_num = pdu.header.seq_num,
+						.ack = 1,
+						.fin = 1
+					};
+					mic_tcp_payload payload = {.data = "", .size = 0};
+					mic_tcp_pdu pdu_ack = {.header = header, .payload = payload };
+					if (IP_send(pdu_ack, remote_addr) == -1) {
+						printf("Erreur dans l'envoie de l'ACK\n");
+						i--;
+						continue;
+					}
+					tab_socket[i].state = CLOSING;
+				}
+
 				//	Envoie ACK
 				mic_tcp_header header = {
 					.source_port = tab_socket[i].local_addr.port,
@@ -283,6 +335,12 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 					app_buffer_put(pdu.payload);
 					num_ack++;
 				}
+				return;
+			}
+
+			else if (tab_socket[i].state == CLOSING) {
+				tab_socket[i].state = CLOSED;
+				printf("socket ferme\n");
 				return;
 			}
 		}
