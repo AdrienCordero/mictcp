@@ -3,6 +3,7 @@
 #include <stdbool.h>
 
 const unsigned long timeout_recv = 100;	//	timeout pour recevoir un message
+const unsigned long timeout_connection = 5000;	//	timeout pour recevoir le ACK pour la connection
 
 mic_tcp_sock *tab_socket;
 int tab_socket_size = 0;
@@ -13,7 +14,7 @@ bool *window;
 const int size_window = 100;
 const int acceptable_loss = 3;
 
-const int loss = 1;
+const int loss = 0;
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -53,7 +54,6 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 	if (socket >= tab_socket_size || socket < 0 || tab_socket[socket].state == CLOSED)
    		return -1;
 	tab_socket[socket].local_addr = addr;
-	printf("addresse : %s, port : %d\n", addr.ip_addr.addr, addr.port);
 	return 0;
 }
 
@@ -67,8 +67,10 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 	if (socket >= tab_socket_size || socket < 0 || tab_socket[socket].state == CLOSED)
    		return -1;
 
-	tab_socket[socket].state = ESTABLISHED;
-	printf("local : %s, remote : %s\n", tab_socket[socket].local_addr.ip_addr.addr, tab_socket[socket].remote_addr.ip_addr.addr);
+	tab_socket[socket].state = IDLE;
+	addr = malloc(sizeof(mic_tcp_sock_addr));
+	tab_socket[socket].remote_addr = *addr;
+
 	return 0;
 }
 
@@ -83,8 +85,37 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
    		return -1;
 
 	tab_socket[socket].remote_addr = addr;
-	printf("local : %s, remote : %s, remote_port : %d\n", tab_socket[socket].local_addr.ip_addr.addr, tab_socket[socket].remote_addr.ip_addr.addr, tab_socket[socket].remote_addr.port);
-	tab_socket[socket].state = ESTABLISHED;
+	
+	//	Envoyer SYN
+	mic_tcp_header header = { .source_port = tab_socket[socket].local_addr.port, .dest_port = addr.port, .syn = 1 };
+	mic_tcp_payload payload = { "", 0 };
+	mic_tcp_pdu pdu = { .header = header, .payload = payload };
+	int i = IP_send(pdu, tab_socket[socket].remote_addr.ip_addr);
+	if (i == -1){
+		printf("Erreur lors de l'etablissement de connexion\n");
+		return -1;
+	}	
+	tab_socket[socket].state = SYN_SENT;
+
+	mic_tcp_pdu *pdu_syn_ack = malloc(sizeof(mic_tcp_pdu));
+	IP_recv(pdu_syn_ack, &tab_socket[socket].local_addr.ip_addr, &tab_socket[socket].remote_addr.ip_addr, timeout_connection);
+	tab_socket[i].remote_addr.ip_addr = addr.ip_addr;
+	if (pdu_syn_ack->header.syn != 1 || pdu_syn_ack->header.ack != 1) {
+		printf("le PDU recu n'est pas un syn-ack\n");
+		exit(1);
+	}
+
+	//	Envoie ACK
+	mic_tcp_header header_ack = { .source_port = tab_socket[i].local_addr.port, .dest_port = tab_socket[i].remote_addr.port, .ack = 1};
+	mic_tcp_payload payload_ack = { "", 0};
+	mic_tcp_pdu pdu_ack = { .header = header_ack, .payload = payload_ack };
+	if (IP_send(pdu_ack, tab_socket[i].remote_addr.ip_addr) == -1) {
+		printf("Erreur lors de l'etablissement de connexon\n");
+		exit(EXIT_FAILURE);
+	}
+	tab_socket[i].state = ESTABLISHED;
+	printf("Connected\n");
+
 	return 0;
 }
 
@@ -99,7 +130,6 @@ bool loss_is_acceptable() {
 	for (int i=0; i < size_window; i++)
 		if (!window[i])
 			cpt++;
-	printf("nb_pertes : %d\n", cpt);
 	if (cpt > acceptable_loss)
 		return false;
 	return true;
@@ -127,7 +157,6 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 		printf("Erreur lors de l'envoie du message\n");
 		return mic_tcp_send(mic_sock, mesg, mesg_size);
 	 } 
-	 printf("num_seq : %d\n", num_sequence);
 
 	 //	Attente ACK
 	 mic_tcp_pdu pdu_ack;
@@ -156,7 +185,6 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 	 }
 
 	 //	Reception correct de l'ACK
-	 printf("ACK recu\n");
 	 update_window(true);
 	 num_sequence++;
 	 return i;
@@ -202,33 +230,61 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 {
    	printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
 	for (int i=0; i < tab_socket_size; i++) {
-		if (tab_socket[i].state == ESTABLISHED && tab_socket[i].local_addr.port == pdu.header.dest_port) {
+		if (tab_socket[i].local_addr.port == pdu.header.dest_port) {
 
-			printf("envoie de l'ACK\n");
+			 if (tab_socket[i].state == IDLE) {
+				if (pdu.header.syn != 1) {
+					printf("le PDU recu n'est pas un syn\n");
+					exit(EXIT_FAILURE);
+				}
+				tab_socket[i].remote_addr.ip_addr = remote_addr;
+				tab_socket[i].remote_addr.port = pdu.header.dest_port;
 
-			//	Envoie ACK
-			mic_tcp_header header = {
-				.source_port = tab_socket[i].local_addr.port,
-				.dest_port = tab_socket[i].remote_addr.port,
-				.ack_num = pdu.header.seq_num,
-				.ack = 1
-			};
-			mic_tcp_payload payload = {.data = "", .size = 0};
-			mic_tcp_pdu pdu_ack = {.header = header, .payload = payload };
-			if (IP_send(pdu_ack, remote_addr) == -1) {
-				printf("Erreur dans l'envoie de l'ACK\n");
-				i--;
-				continue;
+				//	Envoie SYN-ACK
+				mic_tcp_header header = { .source_port = tab_socket[i].local_addr.port, .dest_port = tab_socket[i].remote_addr.port, .ack = 1, .syn = 1};
+				mic_tcp_payload payload = { "", 0 };
+				mic_tcp_pdu pdu_synack = { .header = header, .payload = payload };
+				mic_tcp_ip_addr ip_addr = tab_socket[i].remote_addr.ip_addr;
+				int i = IP_send(pdu_synack, ip_addr);
+				if (i == -1){
+					printf("Erreur lors de l'etablissement de connexion\n");
+					exit(EXIT_FAILURE);
+				}
+				tab_socket[i].state = SYN_RECEIVED;
 			}
-			printf("ACK envoyé\n");
 
-			//	Mise dans le buffer
-			if (pdu.header.seq_num == num_ack) {
-				app_buffer_put(pdu.payload);
-				num_ack++;
+			else if (tab_socket[i].state == SYN_RECEIVED) {
+				if (pdu.header.ack != 1) {
+					printf("le PDU recu n'est pas un ack\n");
+					exit(1);
+				}
+				tab_socket[i].state = ESTABLISHED;
+				printf("Connected\n");
 			}
-			printf("num_ack : %d\n", num_ack);
-			return;
+
+			else if (tab_socket[i].state == ESTABLISHED) {
+				//	Envoie ACK
+				mic_tcp_header header = {
+					.source_port = tab_socket[i].local_addr.port,
+					.dest_port = tab_socket[i].remote_addr.port,
+					.ack_num = pdu.header.seq_num,
+					.ack = 1
+				};
+				mic_tcp_payload payload = {.data = "", .size = 0};
+				mic_tcp_pdu pdu_ack = {.header = header, .payload = payload };
+				if (IP_send(pdu_ack, remote_addr) == -1) {
+					printf("Erreur dans l'envoie de l'ACK\n");
+					i--;
+					continue;
+				}
+
+				//	Mise dans le buffer
+				if (pdu.header.seq_num == num_ack) {
+					app_buffer_put(pdu.payload);
+					num_ack++;
+				}
+				return;
+			}
 		}
 	}
 }
