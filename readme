@@ -1,0 +1,7 @@
+Pour compiler ce projet, il faut utiliser la commande "make".
+Pour lancer le projet en mode texte, la commande est "./tsock_texte -p port" pour le puits et "./tsock_texte -s adresse port" pour la source.
+Pour lancer le projet en mode vidéo, la commande est "./tsock_video -p -t mictcp" pour le puits et "./tsock_video -s -t mictcp" pour la source.
+
+Les 3 premières versions fonctionnent avec le texte et la vidéo. La gestion de la fiabilité partielle est faite avec les variables size_window et acceptable_loss. La première sert à déterminer la taille de la fenêtre et la seconde sert à dire combien de perte sont acceptables dans cette fenêtre. La fenêtre est un tableau de booléen. A chaque perte, on compte le nombre de paquet déjà perdu (nb de "true" dans l tableau). Si il est supérieur à acceptabl loss, on refuse la perte.
+
+La 4e version (dernière version sur github) ne fonctionne pas totalement. La phase d'établissement de connexion ne fonctionne pas lorsqu'un paquet est perdu pendant cette phase. J'ai également commmencé à implémenter une phase de fermeture de la connexion. Je n'ai pas eu le temps de la finir.
